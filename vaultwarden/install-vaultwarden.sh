@@ -290,6 +290,7 @@ services:
     image: rclone/rclone:latest
     container_name: ${BACKUP_CONTAINER_NAME}
     restart: unless-stopped
+    entrypoint: /bin/sh
     environment:
       - TZ=Asia/Seoul
       - RCLONE_CONFIG=/config/rclone/rclone.conf
@@ -298,7 +299,7 @@ services:
       - ./rclone-config:/config/rclone
       - ./backup-logs:/logs
     command: >
-      sh -c "
+      -c "
       while true; do
         YEAR=\\\$\\\$(date +%Y);
         LOGFILE=\"/logs/backup-\\\$\\\$YEAR.log\";
