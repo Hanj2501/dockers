@@ -164,13 +164,46 @@ create_directories() {
 generate_admin_token() {
     print_header "Admin 토큰 생성"
     print_info "Admin 토큰을 생성하고 있습니다..."
-    ADMIN_TOKEN=$(echo -n "$ADMIN_PASSWORD" | docker run --rm -i vaultwarden/server:latest /vaultwarden hash)
+
+    # htpasswd 존재 여부 확인
+    if ! command -v htpasswd >/dev/null 2>&1; then
+        print_warning "apache2-utils가 설치되어 있지 않습니다."
+        print_info "apache2-utils 설치를 진행합니다..."
+
+        # sudo 권한 확인
+        if ! command -v sudo >/dev/null 2>&1; then
+            print_error "sudo 명령을 찾을 수 없습니다. 수동으로 apache2-utils를 설치해주세요."
+            print_info "  apt install apache2-utils"
+            exit 1
+        fi
+
+        # 비대화형 설치
+        sudo apt-get update -y
+        sudo apt-get install -y apache2-utils
+
+        # 재확인
+        if ! command -v htpasswd >/dev/null 2>&1; then
+            print_error "apache2-utils 설치에 실패했습니다."
+            exit 1
+        fi
+
+        print_success "apache2-utils 설치 완료"
+    else
+        print_success "apache2-utils 설치 확인 완료"
+    fi
+
+    # bcrypt Admin Token 생성
+    ADMIN_TOKEN=$(htpasswd -bnBC 10 "" "$ADMIN_PASSWORD" | tr -d ':\n')
+
     if [ -z "$ADMIN_TOKEN" ]; then
         print_error "Admin 토큰 생성에 실패했습니다."
         exit 1
     fi
+
+    # 토큰 저장
     echo "$ADMIN_TOKEN" > .admin-token
     chmod 600 .admin-token
+
     print_success "Admin 토큰 생성 완료"
 }
 
