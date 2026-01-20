@@ -224,6 +224,84 @@ get_user_input() {
     esac
     print_success "Node.js 버전: $NODE_VERSION_NAME"
     
+    # NODE_ENV 환경 설정
+    echo ""
+    echo -e "${CYAN}Node.js 실행 환경(NODE_ENV)을 선택하세요:${NC}"
+    echo "  1) production (프로덕션, 기본값)"
+    echo "  2) development (개발)"
+    echo "  3) local (로컬)"
+    read -p "> " NODE_ENV_CHOICE
+    NODE_ENV_CHOICE=${NODE_ENV_CHOICE:-1}
+    
+    case $NODE_ENV_CHOICE in
+        1)
+            NODE_ENV="production"
+            ;;
+        2)
+            NODE_ENV="development"
+            ;;
+        3)
+            NODE_ENV="local"
+            ;;
+        *)
+            print_warning "잘못된 선택입니다. 기본값(production)을 사용합니다."
+            NODE_ENV="production"
+            ;;
+    esac
+    print_success "실행 환경: $NODE_ENV"
+    
+    # Redis 설치 여부
+    echo ""
+    echo -e "${CYAN}Redis를 함께 설치하시겠습니까? (y/N):${NC}"
+    read -p "> " INSTALL_REDIS
+    
+    if [ "$INSTALL_REDIS" = "y" ] || [ "$INSTALL_REDIS" = "Y" ]; then
+        INSTALL_REDIS="yes"
+        print_success "Redis 설치: 예"
+        
+        # Redis 컨테이너 이름
+        echo ""
+        echo -e "${CYAN}Redis 컨테이너 이름을 입력하세요 (기본값: redis):${NC}"
+        read -p "> " REDIS_CONTAINER_NAME
+        REDIS_CONTAINER_NAME=${REDIS_CONTAINER_NAME:-redis}
+        print_success "Redis 컨테이너: $REDIS_CONTAINER_NAME"
+        
+        # Redis 포트
+        echo ""
+        echo -e "${CYAN}Redis 포트를 입력하세요 (기본값: 6379):${NC}"
+        read -p "> " REDIS_PORT
+        REDIS_PORT=${REDIS_PORT:-6379}
+        
+        # 포트 유효성 검사
+        if ! [[ "$REDIS_PORT" =~ ^[0-9]+$ ]] || [ "$REDIS_PORT" -lt 1 ] || [ "$REDIS_PORT" -gt 65535 ]; then
+            print_error "유효하지 않은 포트 번호입니다. (1-65535)"
+            exit 1
+        fi
+        print_success "Redis 포트: $REDIS_PORT"
+        
+        # Redis 비밀번호
+        echo ""
+        echo -e "${CYAN}Redis 비밀번호를 입력하세요 (선택, 입력하지 않으면 비밀번호 없음):${NC}"
+        read -sp "> " REDIS_PASSWORD
+        echo ""
+        if [ -z "$REDIS_PASSWORD" ]; then
+            print_warning "Redis 비밀번호를 설정하지 않았습니다."
+            REDIS_PASSWORD=""
+        else
+            print_success "Redis 비밀번호 설정 완료"
+        fi
+        
+        # Redis 최대 메모리
+        echo ""
+        echo -e "${CYAN}Redis 최대 메모리를 입력하세요 (예: 256mb, 1gb, 기본값: 256mb):${NC}"
+        read -p "> " REDIS_MAX_MEMORY
+        REDIS_MAX_MEMORY=${REDIS_MAX_MEMORY:-256mb}
+        print_success "Redis 최대 메모리: $REDIS_MAX_MEMORY"
+    else
+        INSTALL_REDIS="no"
+        print_warning "Redis 설치를 건너뜁니다."
+    fi
+    
     # 타임존 설정
     echo ""
     echo -e "${CYAN}서버 타임존을 입력하세요 (기본값: Asia/Seoul):${NC}"
@@ -242,8 +320,26 @@ get_user_input() {
     echo "포트 매핑          : $APP_EXTERNAL_PORT:$APP_INTERNAL_PORT"
     echo "SSH 사용자         : $SSH_USER"
     echo "Node.js 버전       : $NODE_VERSION_NAME"
+    echo "실행 환경          : $NODE_ENV"
     echo "타임존             : $TIMEZONE"
     echo "작업 디렉토리       : app/"
+    
+    if [ "$INSTALL_REDIS" = "yes" ]; then
+        echo ""
+        echo "━━━━━━ Redis 설정 ━━━━━━"
+        echo "Redis 설치         : 예"
+        echo "Redis 컨테이너     : $REDIS_CONTAINER_NAME"
+        echo "Redis 포트         : $REDIS_PORT"
+        if [ -z "$REDIS_PASSWORD" ]; then
+            echo "Redis 비밀번호     : 없음 (⚠️ 보안 주의)"
+        else
+            echo "Redis 비밀번호     : 설정됨"
+        fi
+        echo "Redis 최대 메모리  : $REDIS_MAX_MEMORY"
+    else
+        echo "Redis 설치         : 아니오"
+    fi
+    
     echo ""
     read -p "이 설정으로 진행하시겠습니까? (y/N): " CONFIRM
     
@@ -279,7 +375,7 @@ create_directories() {
     # 애플리케이션 디렉토리 생성
     mkdir -p app
     
-    # 기본 package.json 생성
+    # 기본 package.json 생성 (필수: 이 파일이 있어야 애플리케이션이 실행됨)
     if [ ! -f app/package.json ]; then
         cat > ./app/package.json << 'EOF'
 {
@@ -388,16 +484,40 @@ EOF
 ```
 app/
 ├── index.js           # 메인 애플리케이션 파일
-├── package.json       # 프로젝트 의존성 정의
+├── package.json       # 프로젝트 의존성 정의 (필수!)
 └── README.md         # 이 파일
 ```
 
 ## 중요 사항
 
+**애플리케이션 실행 조건:**
+- **package.json 파일이 반드시 필요합니다**
+- package.json이 있으면 자동으로 `pnpm install` 후 `pnpm start:service` 실행
+- package.json이 없으면 SSH 전용 모드로 실행됩니다
+
+**환경 변수:**
+- **NODE_ENV**: 실행 환경 (production/development/local)
+- **PORT**: 애플리케이션 내부 포트
+- 추가 환경 변수는 docker-compose.yml에서 설정 가능
+
 **애플리케이션 실행 권한:**
-- 애플리케이션은 SSH 사용자 권한으로 실행됩니다 (root가 아님)
-- /app 디렉토리의 소유권은 자동으로 SSH 사용자로 설정됩니다
-- 파일 권한 문제가 발생하면 SSH로 접속하여 확인하세요
+- **/app 디렉토리는 SSH 사용자 소유입니다**
+- 컨테이너 시작 시 자동으로 `chown -R $SSH_USER:$SSH_USER /app` 실행
+- `pnpm install`과 애플리케이션 모두 SSH 사용자 권한으로 실행
+- 파일 생성, 수정, 삭제 모두 SSH 사용자 권한으로 가능
+- root 권한이 필요 없어 보안이 강화됨
+
+**파일 권한 확인:**
+```bash
+# SSH 접속 후
+ls -la ~/app
+
+# 출력 예시:
+# drwxr-xr-x  admin admin  .
+# -rw-r--r--  admin admin  package.json
+# -rw-r--r--  admin admin  index.js
+# drwxr-xr-x  admin admin  node_modules
+```
 
 ## 사용 방법
 
@@ -469,6 +589,41 @@ pm2 logs
 docker exec nodejs-ssh node --version
 ```
 
+### 환경 변수 확인
+```bash
+# NODE_ENV 확인
+docker exec nodejs-ssh printenv NODE_ENV
+
+# 또는 SSH 접속 후
+printenv | grep NODE_ENV
+printenv | grep PORT
+```
+
+### Turborepo 사용
+Turbo가 글로벌로 설치되어 있어 모노레포 관리 가능:
+```bash
+# 컨테이너 접속
+docker exec -it nodejs-ssh bash
+
+# 모든 앱 빌드
+turbo run build
+
+# 특정 앱만 실행
+turbo run dev --filter=api-gateway
+
+# 모든 테스트 실행
+turbo run test
+```
+
+### 포트 사용 확인
+```bash
+# netstat으로 포트 확인
+docker exec nodejs-ssh netstat -tlnp
+
+# 또는 SSH 접속 후
+netstat -tlnp | grep node
+```
+
 ### npm 패키지 관리
 ```bash
 # pnpm으로 패키지 설치 (권장)
@@ -522,6 +677,14 @@ EOF
     # 소유자를 실제 사용자로 변경
     chown -R $REAL_USER:$REAL_USER app
     
+    # Redis 설치 시 redis-data 디렉토리 생성
+    if [ "$INSTALL_REDIS" = "yes" ]; then
+        mkdir -p redis-data
+        chown -R $REAL_USER:$REAL_USER redis-data
+        print_success "Redis 데이터 디렉토리 생성 완료"
+        echo "  - ~/redis-data/ (Redis 데이터 디렉토리, 소유자: $REAL_USER)"
+    fi
+    
     print_success "디렉토리 생성 완료"
     echo "  - ~/app/ (Node.js 애플리케이션 디렉토리, 소유자: $REAL_USER)"
 }
@@ -557,6 +720,7 @@ RUN apt-get update && apt-get install -y \\
     tzdata \\
     ca-certificates \\
     gnupg \\
+    net-tools \\
     && apt-get clean \\
     && rm -rf /var/lib/apt/lists/*
 
@@ -569,8 +733,8 @@ RUN mkdir -p /etc/apt/keyrings && \\
     apt-get clean && \\
     rm -rf /var/lib/apt/lists/*
 
-# npm 최신 버전으로 업데이트 및 pnpm, PM2 설치
-RUN npm install -g npm@latest pnpm pm2
+# npm 최신 버전으로 업데이트 및 pnpm, PM2, turbo 설치
+RUN npm install -g npm@latest pnpm pm2 turbo
 
 # SSH 디렉토리 생성
 RUN mkdir /var/run/sshd
@@ -630,6 +794,10 @@ if [ ! -z "$SSH_USER" ] && [ ! -z "$SSH_PASSWORD" ]; then
         
         echo "SSH 사용자 '$SSH_USER' 생성 완료"
     fi
+    
+    # /app 디렉토리 소유권을 SSH 사용자로 변경 (항상 실행)
+    echo "Setting /app ownership to $SSH_USER..."
+    chown -R $SSH_USER:$SSH_USER /app
 fi
 
 # SSH 호스트 키 생성
@@ -640,21 +808,20 @@ ssh-keygen -A
 
 # package.json이 존재하면 의존성 설치
 if [ -f /app/package.json ]; then
-    echo "Installing Node.js dependencies with pnpm..."
+    echo "Installing Node.js dependencies with pnpm as user: $SSH_USER"
     cd /app
-    pnpm install
-fi
-
-# Node.js 애플리케이션 시작
-if [ -f /app/index.js ]; then
+    
+    # SSH 사용자가 설정되어 있으면 해당 사용자로 pnpm install 실행
+    if [ ! -z "$SSH_USER" ]; then
+        su -s /bin/bash -c "cd /app && pnpm install" $SSH_USER
+    else
+        pnpm install
+    fi
+    
     echo "Starting Node.js application as user: $SSH_USER"
-    cd /app
     
     # SSH 사용자가 설정되어 있으면 해당 사용자로 실행
     if [ ! -z "$SSH_USER" ]; then
-        # 앱 디렉토리 소유권을 SSH 사용자로 변경
-        chown -R $SSH_USER:$SSH_USER /app
-        
         # SSH 사용자로 애플리케이션 실행
         exec su -s /bin/bash -c "cd /app && pnpm start:service" $SSH_USER
     else
@@ -662,7 +829,7 @@ if [ -f /app/index.js ]; then
         exec pnpm start:service
     fi
 else
-    echo "No index.js found. Starting SSH only mode..."
+    echo "No package.json found. Starting SSH only mode..."
     # SSH만 유지
     tail -f /dev/null
 fi
@@ -704,8 +871,87 @@ generate_docker_compose() {
         mv docker-compose.yml docker-compose.yml.backup.$(date +%Y%m%d_%H%M%S)
     fi
     
-    # docker-compose.yml 파일 작성
-    cat > docker-compose.yml << EOF
+    # Redis 설치 여부에 따라 docker-compose.yml 파일 작성
+    if [ "$INSTALL_REDIS" = "yes" ]; then
+        # Redis를 포함한 docker-compose.yml
+        cat > docker-compose.yml << EOF
+################################################################################
+# Node.js + SSH + Redis Server
+################################################################################
+# Node.js 애플리케이션 서버와 SSH, Redis가 포함된 환경
+#
+# 접속 정보:
+# - HTTP: http://YOUR_SERVER_IP:${APP_EXTERNAL_PORT}
+# - SSH: ssh ${SSH_USER}@YOUR_SERVER_IP -p ${SSH_PORT}
+# - Redis: YOUR_SERVER_IP:${REDIS_PORT}
+# - 애플리케이션 경로: ~/app
+#
+# 포트 매핑:
+# - 외부 포트 (호스트): ${APP_EXTERNAL_PORT}
+# - 내부 포트 (컨테이너): ${APP_INTERNAL_PORT}
+#
+# Redis 연결:
+# - Host: ${REDIS_CONTAINER_NAME}
+# - Port: 6379 (컨테이너 내부)
+# - Password: $([ -z "$REDIS_PASSWORD" ] && echo "없음" || echo "설정됨")
+#
+################################################################################
+
+services:
+  # Node.js + SSH 서버
+  ${CONTAINER_NAME}:
+    image: nodejs-ssh-custom:latest
+    container_name: ${CONTAINER_NAME}
+    restart: unless-stopped
+    environment:
+      # 타임존 설정
+      - TZ=${TIMEZONE}
+      # SSH 사용자 설정
+      - SSH_USER=${SSH_USER}
+      - SSH_PASSWORD=${SSH_PASSWORD}
+      # Node.js 환경 변수
+      - NODE_ENV=${NODE_ENV}
+      - PORT=${APP_INTERNAL_PORT}
+      # Redis 연결 정보
+      - REDIS_HOST=${REDIS_CONTAINER_NAME}
+      - REDIS_PORT=6379
+$([ ! -z "$REDIS_PASSWORD" ] && echo "      - REDIS_PASSWORD=${REDIS_PASSWORD}")
+    ports:
+      # Node.js 애플리케이션 포트 (외부:내부)
+      - '${APP_EXTERNAL_PORT}:${APP_INTERNAL_PORT}'
+      # SSH 포트
+      - '${SSH_PORT}:22'
+    volumes:
+      # 애플리케이션 디렉토리
+      - ./app:/app
+    networks:
+      - ${NETWORK_NAME}
+    depends_on:
+      - ${REDIS_CONTAINER_NAME}
+
+  # Redis 서버
+  ${REDIS_CONTAINER_NAME}:
+    image: redis:7-alpine
+    container_name: ${REDIS_CONTAINER_NAME}
+    restart: unless-stopped
+$([ ! -z "$REDIS_PASSWORD" ] && echo "    command: redis-server --requirepass ${REDIS_PASSWORD} --maxmemory ${REDIS_MAX_MEMORY} --maxmemory-policy allkeys-lru" || echo "    command: redis-server --maxmemory ${REDIS_MAX_MEMORY} --maxmemory-policy allkeys-lru")
+    ports:
+      - '${REDIS_PORT}:6379'
+    volumes:
+      - ./redis-data:/data
+    networks:
+      - ${NETWORK_NAME}
+
+################################################################################
+# 네트워크 설정
+################################################################################
+networks:
+  ${NETWORK_NAME}:
+    external: true
+EOF
+    else
+        # Redis 없는 기본 docker-compose.yml
+        cat > docker-compose.yml << EOF
 ################################################################################
 # Node.js + SSH Server
 ################################################################################
@@ -735,7 +981,7 @@ services:
       - SSH_USER=${SSH_USER}
       - SSH_PASSWORD=${SSH_PASSWORD}
       # Node.js 환경 변수
-      - NODE_ENV=production
+      - NODE_ENV=${NODE_ENV}
       - PORT=${APP_INTERNAL_PORT}
     ports:
       # Node.js 애플리케이션 포트 (외부:내부)
@@ -755,6 +1001,7 @@ networks:
   ${NETWORK_NAME}:
     external: true
 EOF
+    fi
     
     print_success "docker-compose.yml 파일 생성 완료"
 }
@@ -785,6 +1032,18 @@ SSH_USER=$SSH_USER
 # 타임존
 TIMEZONE=$TIMEZONE
 
+# Node.js 환경
+NODE_ENV=$NODE_ENV
+
+# Redis 설정
+INSTALL_REDIS=$INSTALL_REDIS
+$([ "$INSTALL_REDIS" = "yes" ] && cat << REDIS_CONFIG
+REDIS_CONTAINER_NAME=$REDIS_CONTAINER_NAME
+REDIS_PORT=$REDIS_PORT
+REDIS_MAX_MEMORY=$REDIS_MAX_MEMORY
+REDIS_CONFIG
+)
+
 # 경로 정보
 APP_PATH=./app
 
@@ -797,10 +1056,19 @@ NODE_VERSION=$NODE_VERSION
 # 접속 정보:
 # HTTP: http://YOUR_SERVER_IP:${APP_EXTERNAL_PORT}
 # SSH: ssh ${SSH_USER}@YOUR_SERVER_IP -p ${SSH_PORT}
+$([ "$INSTALL_REDIS" = "yes" ] && echo "# Redis: YOUR_SERVER_IP:${REDIS_PORT}")
 
 # 포트 매핑:
 # - 외부 포트 (호스트): ${APP_EXTERNAL_PORT}
 # - 내부 포트 (컨테이너): ${APP_INTERNAL_PORT}
+
+$([ "$INSTALL_REDIS" = "yes" ] && cat << REDIS_INFO
+# Redis 연결 (컨테이너 내부):
+# - Host: ${REDIS_CONTAINER_NAME}
+# - Port: 6379
+$([ ! -z "$REDIS_PASSWORD" ] && echo "# - Password: (설정됨)")
+REDIS_INFO
+)
 
 # 애플리케이션 관리:
 # - 코드 수정 후 재시작: docker compose restart
@@ -870,9 +1138,13 @@ final_summary() {
     echo "  ✓ docker-compose.yml (Docker Compose 설정)"
     echo "  ✓ .nodejs-ssh-config (설정 정보)"
     echo "  ✓ app/ (Node.js 애플리케이션 디렉토리)"
-    echo "  ✓ app/package.json (npm 패키지 설정)"
+    echo "  ✓ app/package.json (npm 패키지 설정 - 필수!)"
     echo "  ✓ app/index.js (메인 애플리케이션 파일)"
     echo "  ✓ app/README.md (애플리케이션 가이드)"
+    
+    if [ "$INSTALL_REDIS" = "yes" ]; then
+        echo "  ✓ redis-data/ (Redis 데이터 디렉토리)"
+    fi
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "📝 설정 정보"
@@ -887,9 +1159,24 @@ final_summary() {
     echo "  앱 실행 사용자     : $SSH_USER (root 아님)"
     echo "  타임존             : $TIMEZONE"
     echo "  Node.js 버전       : $NODE_VERSION_NAME"
+    echo "  실행 환경          : $NODE_ENV"
     echo "  패키지 매니저       : pnpm (npm도 사용 가능)"
+    echo "  글로벌 도구        : turbo, pm2, pnpm"
     echo "  작업 디렉토리       : app/"
     echo "  이미지             : nodejs-ssh-custom:latest"
+    
+    if [ "$INSTALL_REDIS" = "yes" ]; then
+        echo ""
+        echo "  ━━━━━━ Redis 설정 ━━━━━━"
+        echo "  Redis 컨테이너     : $REDIS_CONTAINER_NAME"
+        echo "  Redis 포트         : $REDIS_PORT"
+        echo "  Redis 최대 메모리  : $REDIS_MAX_MEMORY"
+        if [ -z "$REDIS_PASSWORD" ]; then
+            echo "  Redis 비밀번호     : 없음 (⚠️ 보안 주의)"
+        else
+            echo "  Redis 비밀번호     : 설정됨"
+        fi
+    fi
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "🌐 접속 정보"
@@ -907,6 +1194,23 @@ final_summary() {
     echo "  📌 SSH 접속:"
     echo "     ssh ${SSH_USER}@${SERVER_IP} -p ${SSH_PORT}"
     echo "     비밀번호: (설정한 비밀번호)"
+    
+    if [ "$INSTALL_REDIS" = "yes" ]; then
+        echo ""
+        echo "  📌 Redis 접속 (외부):"
+        echo "     Host: ${SERVER_IP}"
+        echo "     Port: ${REDIS_PORT}"
+        if [ ! -z "$REDIS_PASSWORD" ]; then
+            echo "     Password: (설정한 비밀번호)"
+        else
+            echo "     Password: 없음"
+        fi
+        echo ""
+        echo "  📌 Redis 접속 (컨테이너 내부):"
+        echo "     Host: ${REDIS_CONTAINER_NAME}"
+        echo "     Port: 6379"
+        echo "     예: redis-cli -h ${REDIS_CONTAINER_NAME} -p 6379$([ ! -z "$REDIS_PASSWORD" ] && echo " -a YOUR_PASSWORD")"
+    fi
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "🐳 사용 방법"
@@ -917,8 +1221,18 @@ final_summary() {
     echo "  # 접속 후 디렉토리 확인"
     echo "  cd ~/app              # Node.js 애플리케이션 디렉토리"
     echo ""
+    echo "  # 파일 소유권 확인 (/app 디렉토리는 SSH 사용자 소유)"
+    echo "  ls -la ~/app"
+    echo ""
     echo "  # 현재 실행 중인 프로세스 확인 (SSH 사용자로 실행됨)"
     echo "  ps aux | grep node"
+    echo ""
+    echo "  # 포트 사용 확인 (netstat)"
+    echo "  netstat -tlnp | grep node"
+    echo ""
+    echo "  # Turborepo 명령어 사용"
+    echo "  turbo run build"
+    echo "  turbo run dev --filter=api-gateway"
     echo ""
     echo "  # 파일 업로드 (SCP 사용)"
     echo "  scp -P ${SSH_PORT} app.js ${SSH_USER}@${SERVER_IP}:~/app/"
@@ -942,6 +1256,8 @@ final_summary() {
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "⚙️ 개발 가이드"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "  ⚠️ 중요: package.json에 start:service 스크립트가 필요합니다!"
+    echo ""
     echo "  1. 코드 수정:"
     echo "     - SSH로 접속하여 직접 수정"
     echo "     - 또는 SCP로 파일 업로드"
@@ -952,11 +1268,21 @@ final_summary() {
     echo "  3. 개발 의존성 추가:"
     echo "     docker exec ${CONTAINER_NAME} pnpm install --save-dev nodemon"
     echo ""
-    echo "  4. 애플리케이션 재시작:"
+    echo "  4. Turborepo 사용 (모노레포):"
+    echo "     docker exec ${CONTAINER_NAME} turbo run build"
+    echo "     docker exec ${CONTAINER_NAME} turbo run dev --filter=api-*"
+    echo ""
+    echo "  5. 애플리케이션 재시작:"
     echo "     docker compose restart"
     echo ""
-    echo "  5. 실시간 로그 확인:"
+    echo "  6. 포트 사용 확인:"
+    echo "     docker exec ${CONTAINER_NAME} netstat -tlnp"
+    echo ""
+    echo "  7. 실시간 로그 확인:"
     echo "     docker compose logs -f"
+    echo ""
+    echo "  8. 환경 변수 변경 (NODE_ENV 등):"
+    echo "     docker-compose.yml 수정 후 docker compose restart"
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "💡 유용한 명령어"
@@ -967,8 +1293,23 @@ final_summary() {
     echo "  • 컨테이너 상태: docker compose ps"
     echo "  • 컨테이너 접속: docker exec -it ${CONTAINER_NAME} bash"
     echo "  • Node.js REPL: docker exec -it ${CONTAINER_NAME} node"
+    echo "  • 환경변수 확인: docker exec ${CONTAINER_NAME} printenv | grep NODE_ENV"
     echo "  • 애플리케이션 로그: docker logs -f ${CONTAINER_NAME}"
+    echo "  • 포트 확인: docker exec -it ${CONTAINER_NAME} netstat -tlnp"
+    echo "  • Turbo 명령어: docker exec -it ${CONTAINER_NAME} turbo run build"
     echo "  • PM2 사용 (선택): docker exec -it ${CONTAINER_NAME} pm2 start app.js"
+    
+    if [ "$INSTALL_REDIS" = "yes" ]; then
+        echo ""
+        echo "  Redis 관련:"
+        echo "  • Redis CLI 접속: docker exec -it ${REDIS_CONTAINER_NAME} redis-cli$([ ! -z "$REDIS_PASSWORD" ] && echo " -a YOUR_PASSWORD")"
+        echo "  • Redis 상태 확인: docker exec ${REDIS_CONTAINER_NAME} redis-cli$([ ! -z "$REDIS_PASSWORD" ] && echo " -a YOUR_PASSWORD") ping"
+        echo "  • Redis 메모리 확인: docker exec ${REDIS_CONTAINER_NAME} redis-cli$([ ! -z "$REDIS_PASSWORD" ] && echo " -a YOUR_PASSWORD") info memory"
+        echo "  • Redis 로그: docker logs -f ${REDIS_CONTAINER_NAME}"
+        echo "  • Redis 데이터 위치: ./redis-data/dump.rdb"
+    fi
+    
+    echo ""
     echo "  • 이미지 재빌드: docker build -t nodejs-ssh-custom:latest ."
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -982,20 +1323,39 @@ final_summary() {
     echo "  5. 환경 변수로 민감 정보 관리 (.env 파일 사용)"
     echo "  6. 디스크 공간 모니터링 (node_modules 크기 주의)"
     echo "  7. 정기적인 pnpm/npm 패키지 업데이트"
-    echo "  8. 프로덕션에서는 NODE_ENV=production 설정"
+    echo "  8. 프로덕션에서는 NODE_ENV=production 사용 (설정됨: $NODE_ENV)"
     echo "  9. 애플리케이션 재시작 시 docker compose restart 사용"
+    
+    if [ "$INSTALL_REDIS" = "yes" ]; then
+        echo ""
+        echo "  Redis 보안:"
+        if [ -z "$REDIS_PASSWORD" ]; then
+            echo "  🔴 Redis 비밀번호가 설정되지 않았습니다!"
+            echo "  🔴 프로덕션에서는 반드시 비밀번호를 설정하세요!"
+        fi
+        echo "  • Redis 포트를 외부에 노출하지 않는 것을 권장"
+        echo "  • 필요시 방화벽에서 Redis 포트(${REDIS_PORT}) 제한"
+        echo "  • 정기적으로 Redis 데이터 백업 (./redis-data/dump.rdb)"
+        echo "  • Redis 데이터는 ./redis-data 디렉토리에 저장됩니다"
+    fi
     echo ""
     echo "  ✅ 보안 강화 사항:"
     echo "  • 애플리케이션은 root가 아닌 '$SSH_USER' 권한으로 실행됩니다"
-    echo "  • /app 디렉토리는 자동으로 '$SSH_USER' 소유로 설정됩니다"
+    echo "  • /app 디렉토리는 '$SSH_USER' 소유로 설정됩니다"
+    echo "  • pnpm install도 '$SSH_USER' 권한으로 실행됩니다"
+    echo "  • 파일 생성/수정 시 권한 문제가 발생하지 않습니다"
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "📚 참고 문서"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "  • Node.js 문서: https://nodejs.org/docs/latest/api/"
     echo "  • pnpm 문서: https://pnpm.io/"
+    echo "  • Turborepo 문서: https://turbo.build/repo/docs"
     echo "  • Express.js 문서: https://expressjs.com/"
     echo "  • PM2 문서: https://pm2.keymetrics.io/docs/ (선택적 사용)"
+    if [ "$INSTALL_REDIS" = "yes" ]; then
+        echo "  • Redis 문서: https://redis.io/docs/"
+    fi
     echo "  • Docker 문서: https://docs.docker.com/"
     echo "  • 애플리케이션 가이드: app/README.md"
     echo ""
