@@ -392,6 +392,13 @@ app/
 └── README.md         # 이 파일
 ```
 
+## 중요 사항
+
+**애플리케이션 실행 권한:**
+- 애플리케이션은 SSH 사용자 권한으로 실행됩니다 (root가 아님)
+- /app 디렉토리의 소유권은 자동으로 SSH 사용자로 설정됩니다
+- 파일 권한 문제가 발생하면 SSH로 접속하여 확인하세요
+
 ## 사용 방법
 
 ### 1. 애플리케이션 수정
@@ -421,11 +428,6 @@ npm install package-name
 docker compose restart
 ```
 
-또는 컨테이너 내부에서:
-```bash
-docker exec nodejs-ssh pm2 restart all
-```
-
 ## 개발 팁
 
 ### 파일 업로드 (SCP)
@@ -442,8 +444,24 @@ scp -P 2222 -r ./src user@server:~/app/
 # Docker 로그
 docker compose logs -f
 
-# 컨테이너 내부 로그
-docker exec nodejs-ssh pm2 logs
+# 또는 직접 컨테이너 로그
+docker logs -f nodejs-ssh
+```
+
+### PM2 사용 (선택적)
+PM2가 글로벌로 설치되어 있어 필요시 사용 가능:
+```bash
+# 컨테이너 접속
+docker exec -it nodejs-ssh bash
+
+# PM2로 앱 실행
+pm2 start index.js --name myapp
+
+# PM2 상태 확인
+pm2 status
+
+# PM2 로그
+pm2 logs
 ```
 
 ### Node.js 버전 확인
@@ -470,9 +488,10 @@ docker exec nodejs-ssh pnpm update
 
 프로덕션 환경에서는:
 1. 환경 변수를 docker-compose.yml에서 설정
-2. PM2를 사용한 프로세스 관리 (이미 포함됨)
-3. 로그 로테이션 설정
-4. 보안 강화 (방화벽, SSH 키 인증 등)
+2. 로그 로테이션 설정
+3. 보안 강화 (방화벽, SSH 키 인증 등)
+4. 애플리케이션 모니터링 설정
+5. 필요시 PM2로 프로세스 관리 (글로벌 설치됨)
 
 ## 문제 해결
 
@@ -626,11 +645,22 @@ if [ -f /app/package.json ]; then
     pnpm install
 fi
 
-# Node.js 애플리케이션 시작 (PM2 사용)
+# Node.js 애플리케이션 시작
 if [ -f /app/index.js ]; then
-    echo "Starting Node.js application with PM2..."
+    echo "Starting Node.js application as user: $SSH_USER"
     cd /app
-    pm2 start "pnpm start:service" --name "app" --no-daemon
+    
+    # SSH 사용자가 설정되어 있으면 해당 사용자로 실행
+    if [ ! -z "$SSH_USER" ]; then
+        # 앱 디렉토리 소유권을 SSH 사용자로 변경
+        chown -R $SSH_USER:$SSH_USER /app
+        
+        # SSH 사용자로 애플리케이션 실행
+        exec su -s /bin/bash -c "cd /app && pnpm start:service" $SSH_USER
+    else
+        # SSH_USER가 없으면 root로 실행
+        exec pnpm start:service
+    fi
 else
     echo "No index.js found. Starting SSH only mode..."
     # SSH만 유지
@@ -774,8 +804,8 @@ NODE_VERSION=$NODE_VERSION
 
 # 애플리케이션 관리:
 # - 코드 수정 후 재시작: docker compose restart
-# - PM2 상태 확인: docker exec ${CONTAINER_NAME} pm2 status
-# - PM2 로그 확인: docker exec ${CONTAINER_NAME} pm2 logs
+# - 로그 확인: docker compose logs -f
+# - 컨테이너 내부 접속: docker exec -it ${CONTAINER_NAME} bash
 EOF
     
     chmod 600 .nodejs-ssh-config
@@ -854,6 +884,7 @@ final_summary() {
     echo "  앱 내부 포트       : $APP_INTERNAL_PORT (컨테이너)"
     echo "  포트 매핑          : $APP_EXTERNAL_PORT:$APP_INTERNAL_PORT"
     echo "  SSH 사용자         : $SSH_USER"
+    echo "  앱 실행 사용자     : $SSH_USER (root 아님)"
     echo "  타임존             : $TIMEZONE"
     echo "  Node.js 버전       : $NODE_VERSION_NAME"
     echo "  패키지 매니저       : pnpm (npm도 사용 가능)"
@@ -886,6 +917,9 @@ final_summary() {
     echo "  # 접속 후 디렉토리 확인"
     echo "  cd ~/app              # Node.js 애플리케이션 디렉토리"
     echo ""
+    echo "  # 현재 실행 중인 프로세스 확인 (SSH 사용자로 실행됨)"
+    echo "  ps aux | grep node"
+    echo ""
     echo "  # 파일 업로드 (SCP 사용)"
     echo "  scp -P ${SSH_PORT} app.js ${SSH_USER}@${SERVER_IP}:~/app/"
     echo "  scp -P ${SSH_PORT} -r src/ ${SSH_USER}@${SERVER_IP}:~/app/"
@@ -901,12 +935,6 @@ final_summary() {
     echo ""
     echo "  # npm으로 패키지 설치"
     echo "  docker exec ${CONTAINER_NAME} npm install package-name"
-    echo ""
-    echo "  # PM2 상태 확인"
-    echo "  docker exec ${CONTAINER_NAME} pm2 status"
-    echo ""
-    echo "  # PM2 로그 확인"
-    echo "  docker exec ${CONTAINER_NAME} pm2 logs"
     echo ""
     echo "  # 애플리케이션 재시작"
     echo "  docker compose restart"
@@ -939,7 +967,8 @@ final_summary() {
     echo "  • 컨테이너 상태: docker compose ps"
     echo "  • 컨테이너 접속: docker exec -it ${CONTAINER_NAME} bash"
     echo "  • Node.js REPL: docker exec -it ${CONTAINER_NAME} node"
-    echo "  • PM2 모니터링: docker exec -it ${CONTAINER_NAME} pm2 monit"
+    echo "  • 애플리케이션 로그: docker logs -f ${CONTAINER_NAME}"
+    echo "  • PM2 사용 (선택): docker exec -it ${CONTAINER_NAME} pm2 start app.js"
     echo "  • 이미지 재빌드: docker build -t nodejs-ssh-custom:latest ."
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -954,6 +983,11 @@ final_summary() {
     echo "  6. 디스크 공간 모니터링 (node_modules 크기 주의)"
     echo "  7. 정기적인 pnpm/npm 패키지 업데이트"
     echo "  8. 프로덕션에서는 NODE_ENV=production 설정"
+    echo "  9. 애플리케이션 재시작 시 docker compose restart 사용"
+    echo ""
+    echo "  ✅ 보안 강화 사항:"
+    echo "  • 애플리케이션은 root가 아닌 '$SSH_USER' 권한으로 실행됩니다"
+    echo "  • /app 디렉토리는 자동으로 '$SSH_USER' 소유로 설정됩니다"
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "📚 참고 문서"
@@ -961,7 +995,7 @@ final_summary() {
     echo "  • Node.js 문서: https://nodejs.org/docs/latest/api/"
     echo "  • pnpm 문서: https://pnpm.io/"
     echo "  • Express.js 문서: https://expressjs.com/"
-    echo "  • PM2 문서: https://pm2.keymetrics.io/docs/"
+    echo "  • PM2 문서: https://pm2.keymetrics.io/docs/ (선택적 사용)"
     echo "  • Docker 문서: https://docs.docker.com/"
     echo "  • 애플리케이션 가이드: app/README.md"
     echo ""
